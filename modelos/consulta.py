@@ -1,4 +1,5 @@
 """Módulo Consulta: agendamento e ciclo de vida das consultas."""
+from banco import repositorios
 from modelos.medico import Medico
 from modelos.paciente import Paciente
 from utils import formatacoes, validacoes
@@ -8,7 +9,6 @@ class Consulta:
     """Representa uma consulta entre um paciente e um médico."""
 
     consultas = []
-    _proximo_id = 1
 
     def __init__(self, paciente, medico, data, hora, tipo='presencial'):
         if not isinstance(paciente, Paciente):
@@ -22,15 +22,39 @@ class Consulta:
         if not Consulta.validar_tipo(tipo):
             raise ValueError('Tipo de consulta inválido. Deve ser "presencial" ou "online".')
 
-        self.id = Consulta._proximo_id
-        Consulta._proximo_id += 1
         self.paciente = paciente
         self.medico = medico
         self.data = data
         self.hora = hora
         self.tipo = tipo.strip().lower()
         self._status = 'agendada'
+        # O número da consulta é gerado pelo banco (AUTOINCREMENT).
+        self.id = repositorios.inserir_consulta(
+            paciente.cpf, medico.crm, self.data, self.hora, self.tipo, self._status,
+        )
         Consulta.consultas.append(self)
+
+    @classmethod
+    def _de_registro(cls, linha, pacientes, medicos):
+        """Monta uma consulta a partir de uma linha do banco, ligando-a aos objetos já carregados."""
+        consulta = cls.__new__(cls)
+        consulta.id = linha['id']
+        consulta.paciente = pacientes[linha['paciente_cpf']]
+        consulta.medico = medicos[linha['medico_crm']]
+        consulta.data = linha['data']
+        consulta.hora = linha['hora']
+        consulta.tipo = linha['tipo']
+        consulta._status = linha['status']
+        return consulta
+
+    @classmethod
+    def carregar(cls):
+        """Substitui a lista em memória pelas consultas do banco. Carregue pacientes e médicos antes."""
+        pacientes = {paciente.cpf: paciente for paciente in Paciente.pacientes}
+        medicos = {medico.crm: medico for medico in Medico.medicos}
+        cls.consultas[:] = [
+            cls._de_registro(linha, pacientes, medicos) for linha in repositorios.listar_consultas()
+        ]
 
     def __str__(self):
         linha = '=' * 30
@@ -65,16 +89,20 @@ class Consulta:
         if self._status != 'agendada':
             raise ValueError(f'Operação não permitida: a consulta está {self._status}.')
 
+    def _definir_status(self, status):
+        repositorios.definir_status_consulta(self.id, status)
+        self._status = status
+
     def realizar(self):
         """Marca a consulta como realizada e libera o médico."""
         self._exigir_agendada()
-        self._status = 'realizada'
+        self._definir_status('realizada')
         self.medico.liberar()
 
     def cancelar(self):
         """Marca a consulta como cancelada e libera o médico."""
         self._exigir_agendada()
-        self._status = 'cancelada'
+        self._definir_status('cancelada')
         self.medico.liberar()
 
     def remarcar(self, data, hora):
@@ -83,6 +111,7 @@ class Consulta:
             raise ValueError('Data inválida ou no passado. Use DD/MM/AAAA.')
         if not validacoes.validar_hora(hora):
             raise ValueError('Hora inválida. Use HH:MM.')
+        repositorios.remarcar_consulta(self.id, data, hora)
         self.data = data
         self.hora = hora
 

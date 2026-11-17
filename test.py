@@ -2,9 +2,13 @@
 
 Execute com:  python -m unittest test -v
 """
+import os
+import sqlite3
+import tempfile
 import unittest
 from datetime import date, timedelta
 
+import banco
 from modelos.consulta import Consulta
 from modelos.financeiro import Financeiro
 from modelos.medico import Medico
@@ -16,10 +20,8 @@ AMANHA = (date.today() + timedelta(days=1)).strftime('%d/%m/%Y')
 
 class BaseTeste(unittest.TestCase):
     def setUp(self):
-        Paciente.pacientes.clear()
-        Medico.medicos.clear()
-        Consulta.consultas.clear()
-        Financeiro.registros.clear()
+        banco.inicializar(':memory:')  # banco novo e vazio a cada teste
+        self.addCleanup(banco.fechar)
         self.paciente = Paciente('ana souza', '12345678900', '10/03/1990', '41999998888', 'ana@email.com')
         self.medico = Medico('carlos lima', '123456', 'Cardiologia', '4133334444')
 
@@ -112,6 +114,77 @@ class TestConsultaEFinanceiro(BaseTeste):
         self.paciente.alternar_status()
         with self.assertRaises(ValueError):
             Consulta.agendar(self.paciente, self.medico, AMANHA, '09:00')
+
+
+class TestBancoDeDados(unittest.TestCase):
+    """Garante que os dados sobrevivem ao fechar e reabrir o banco."""
+
+    def setUp(self):
+        pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(pasta.cleanup)
+        self.addCleanup(banco.fechar)  # roda antes do cleanup da pasta (ordem inversa)
+        self.caminho = os.path.join(pasta.name, 'teste.db')
+        banco.inicializar(self.caminho)
+
+    def reabrir(self):
+        banco.fechar()
+        for lista in (Paciente.pacientes, Medico.medicos, Consulta.consultas, Financeiro.registros):
+            lista.clear()
+        banco.inicializar(self.caminho)
+
+    def test_dados_persistem_apos_reabrir(self):
+        paciente = Paciente('ana souza', '12345678900', '10/03/1990', '41999998888', 'ana@email.com')
+        medico = Medico('carlos lima', '123456', 'Cardiologia', '4133334444')
+        realizada = Consulta.agendar(paciente, medico, AMANHA, '14:30', 'online')
+        realizada.realizar()
+        Financeiro(realizada, 350).registrar_pagamento()
+        agendada = Consulta.agendar(paciente, medico, AMANHA, '16:00')
+        agendada.remarcar(AMANHA, '17:00')
+        paciente.atualizar(telefone='41911112222')
+
+        self.reabrir()
+
+        paciente = Paciente.buscar_por_cpf('12345678900')
+        medico = Medico.buscar_por_crm('123456')
+        self.assertEqual(paciente.telefone, '41911112222')
+        self.assertFalse(medico.disponivel)  # ocupado pela consulta ainda agendada
+        self.assertEqual([c.id for c in Consulta.consultas], [realizada.id, agendada.id])
+
+        recarregada = Consulta.buscar_por_id(agendada.id)
+        self.assertIs(recarregada.paciente, paciente)
+        self.assertIs(recarregada.medico, medico)
+        self.assertEqual((recarregada.hora, recarregada.status), ('17:00', 'agendada'))
+
+        registro = Financeiro.buscar_por_consulta(Consulta.buscar_por_id(realizada.id))
+        self.assertTrue(registro.pago)
+        self.assertEqual(Financeiro.total_recebido(), 350)
+
+        # o próximo número continua a sequência do banco
+        recarregada.cancelar()
+        nova = Consulta.agendar(paciente, medico, AMANHA, '10:00')
+        self.assertEqual(nova.id, agendada.id + 1)
+
+    def test_exclusoes_persistem(self):
+        Paciente('joao', '98765432100', '01/01/2000', '11988887777').excluir()
+        self.reabrir()
+        self.assertIsNone(Paciente.buscar_por_cpf('98765432100'))
+
+    def test_nao_exclui_quem_tem_historico(self):
+        paciente = Paciente('ana souza', '12345678900', '10/03/1990', '41999998888')
+        medico = Medico('carlos lima', '123456', 'Cardiologia', '4133334444')
+        Consulta.agendar(paciente, medico, AMANHA, '09:00').cancelar()
+        with self.assertRaises(ValueError):
+            paciente.excluir()
+        with self.assertRaises(ValueError):
+            medico.excluir()
+        self.assertIs(Paciente.buscar_por_cpf('12345678900'), paciente)
+
+    def test_banco_rejeita_cpf_duplicado(self):
+        Paciente('ana souza', '12345678900', '10/03/1990', '41999998888')
+        Paciente.pacientes.clear()  # simula a memória fora de sincronia com o banco
+        with self.assertRaises(sqlite3.IntegrityError):
+            Paciente('outra', '12345678900', '10/03/1990', '41999998888')
+        self.assertEqual(Paciente.pacientes, [])
 
 
 if __name__ == '__main__':

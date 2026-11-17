@@ -1,6 +1,7 @@
 """Módulo Paciente: cadastro e controle de pacientes."""
 from datetime import date
 
+from banco import repositorios
 from utils import formatacoes, validacoes
 
 
@@ -30,7 +31,27 @@ class Paciente:
         self.telefone = telefone
         self.email = email or None
         self._ativo = True
+        repositorios.inserir_paciente(
+            self.cpf, self.nome, self.data_nascimento, self.telefone, self.email, self._ativo,
+        )
         Paciente.pacientes.append(self)
+
+    @classmethod
+    def _de_registro(cls, linha):
+        """Monta um paciente a partir de uma linha do banco (sem validar nem gravar de novo)."""
+        paciente = cls.__new__(cls)
+        paciente.nome = linha['nome']
+        paciente.cpf = linha['cpf']
+        paciente.data_nascimento = linha['data_nascimento']
+        paciente.telefone = linha['telefone']
+        paciente.email = linha['email']
+        paciente._ativo = bool(linha['ativo'])
+        return paciente
+
+    @classmethod
+    def carregar(cls):
+        """Substitui a lista em memória pelos pacientes gravados no banco."""
+        cls.pacientes[:] = [cls._de_registro(linha) for linha in repositorios.listar_pacientes()]
 
     def __str__(self):
         linha = '=' * 30
@@ -87,7 +108,9 @@ class Paciente:
         return validacoes.validar_cpf(cpf)
 
     def alternar_status(self):
-        self._ativo = not self._ativo
+        novo_status = not self._ativo
+        repositorios.definir_ativo_paciente(self.cpf, novo_status)
+        self._ativo = novo_status
 
     def atualizar(self, nome=None, telefone=None, email=None):
         """Atualiza os campos informados (None mantém o valor atual)."""
@@ -100,13 +123,19 @@ class Paciente:
         if email is not None and not validacoes.validar_email(email):
             raise ValueError('Email inválido.')
 
-        if nome is not None:
-            self.nome = nome
-        if telefone is not None:
-            self.telefone = telefone
-        if email is not None:
-            self.email = email
+        novo_nome = self.nome if nome is None else nome
+        novo_telefone = self.telefone if telefone is None else telefone
+        novo_email = self.email if email is None else email
+        repositorios.atualizar_paciente(self.cpf, novo_nome, novo_telefone, novo_email)
+        self.nome, self.telefone, self.email = novo_nome, novo_telefone, novo_email
 
     def excluir(self):
+        """Exclui o paciente. Quem já tem consultas no histórico deve ser desativado, não excluído."""
+        if repositorios.paciente_tem_consultas(self.cpf):
+            raise ValueError(
+                'O paciente possui consultas no histórico e não pode ser excluído. '
+                'Desative-o em vez disso.'
+            )
+        repositorios.excluir_paciente(self.cpf)
         if self in Paciente.pacientes:
             Paciente.pacientes.remove(self)

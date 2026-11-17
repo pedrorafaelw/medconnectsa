@@ -1,6 +1,8 @@
 """MedConnect System - aplicação principal de terminal."""
+import sqlite3
 from getpass import getpass
 
+import banco
 from modelos.consulta import Consulta
 from modelos.financeiro import Financeiro
 from modelos.medico import Medico
@@ -37,7 +39,11 @@ def executar_menu(titulo, opcoes):
             return
         descricao, acao = opcoes[escolha]
         cabecalho(descricao.upper())
-        acao()
+        try:
+            acao()
+        except sqlite3.Error as erro:
+            print(f'\nErro no banco de dados: {erro}')
+            print('A operação não foi concluída.')
         pausar()
 
 
@@ -183,7 +189,11 @@ def excluir_paciente():
         return
     print(paciente)
     if confirmar('\nConfirma a exclusão deste paciente?'):
-        paciente.excluir()
+        try:
+            paciente.excluir()
+        except ValueError as erro:
+            print(f'Erro ao excluir: {erro}')
+            return
         print('Paciente excluído com sucesso.')
 
 
@@ -282,7 +292,11 @@ def excluir_medico():
         return
     print(medico)
     if confirmar('\nConfirma a exclusão deste médico?'):
-        medico.excluir()
+        try:
+            medico.excluir()
+        except ValueError as erro:
+            print(f'Erro ao excluir: {erro}')
+            return
         print('Médico excluído com sucesso.')
 
 
@@ -571,7 +585,7 @@ def login():
     for tentativa in range(1, MAX_TENTATIVAS + 1):
         cabecalho('MEDCONNECT - LOGIN')
         usuario = input('Usuário: ').strip()
-        senha = getpass('Senha: ')
+        senha = input('Senha: ')
         if usuario == USUARIO and senha == SENHA:
             return True
         restantes = MAX_TENTATIVAS - tentativa
@@ -606,12 +620,19 @@ def menu_principal():
 
 def main():
     try:
+        banco.inicializar()
+    except sqlite3.Error as erro:
+        print(f'Não foi possível abrir o banco de dados ({banco.CAMINHO_PADRAO}): {erro}')
+        return
+    try:
         if not login():
             print('\nNúmero máximo de tentativas atingido. Acesso bloqueado.')
             return
         menu_principal()
     except (KeyboardInterrupt, EOFError):
         print('\n\nSistema encerrado pelo usuário.')
+    finally:
+        banco.fechar()
 
 
 if __name__ == '__main__':

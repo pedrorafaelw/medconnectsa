@@ -1,4 +1,5 @@
 """Módulo Médico: cadastro e controle de disponibilidade dos médicos."""
+from banco import repositorios
 from utils import formatacoes, validacoes
 
 
@@ -26,7 +27,26 @@ class Medico:
         self.especialidade = especialidade
         self.telefone = telefone
         self._disponivel = True
+        repositorios.inserir_medico(
+            self.crm, self.nome, self.especialidade, self.telefone, self._disponivel,
+        )
         Medico.medicos.append(self)
+
+    @classmethod
+    def _de_registro(cls, linha):
+        """Monta um médico a partir de uma linha do banco (sem validar nem gravar de novo)."""
+        medico = cls.__new__(cls)
+        medico.nome = linha['nome']
+        medico.crm = linha['crm']
+        medico.especialidade = linha['especialidade']
+        medico.telefone = linha['telefone']
+        medico._disponivel = bool(linha['disponivel'])
+        return medico
+
+    @classmethod
+    def carregar(cls):
+        """Substitui a lista em memória pelos médicos gravados no banco."""
+        cls.medicos[:] = [cls._de_registro(linha) for linha in repositorios.listar_medicos()]
 
     def __str__(self):
         linha = '=' * 30
@@ -80,14 +100,18 @@ class Medico:
     def validar_crm(crm):
         return isinstance(crm, str) and crm.isdigit() and 4 <= len(crm) <= 6
 
+    def _definir_disponibilidade(self, disponivel):
+        repositorios.definir_disponibilidade_medico(self.crm, disponivel)
+        self._disponivel = disponivel
+
     def alternar_disponibilidade(self):
-        self._disponivel = not self._disponivel
+        self._definir_disponibilidade(not self._disponivel)
 
     def ocupar(self):
-        self._disponivel = False
+        self._definir_disponibilidade(False)
 
     def liberar(self):
-        self._disponivel = True
+        self._definir_disponibilidade(True)
 
     def atualizar(self, nome=None, especialidade=None, telefone=None):
         """Atualiza os campos informados (None mantém o valor atual)."""
@@ -102,13 +126,19 @@ class Medico:
         if telefone is not None and not validacoes.validar_telefone(telefone):
             raise ValueError('Telefone inválido. Informe DDD + número.')
 
-        if nome is not None:
-            self.nome = nome
-        if especialidade is not None:
-            self.especialidade = especialidade
-        if telefone is not None:
-            self.telefone = telefone
+        novo_nome = self.nome if nome is None else nome
+        nova_especialidade = self.especialidade if especialidade is None else especialidade
+        novo_telefone = self.telefone if telefone is None else telefone
+        repositorios.atualizar_medico(self.crm, novo_nome, nova_especialidade, novo_telefone)
+        self.nome, self.especialidade, self.telefone = novo_nome, nova_especialidade, novo_telefone
 
     def excluir(self):
+        """Exclui o médico. Quem já tem consultas no histórico não pode ser excluído."""
+        if repositorios.medico_tem_consultas(self.crm):
+            raise ValueError(
+                'O médico possui consultas no histórico e não pode ser excluído. '
+                'Marque-o como indisponível em vez disso.'
+            )
+        repositorios.excluir_medico(self.crm)
         if self in Medico.medicos:
             Medico.medicos.remove(self)

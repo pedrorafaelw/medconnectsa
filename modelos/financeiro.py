@@ -1,6 +1,7 @@
 """Módulo Financeiro: cobranças e pagamentos das consultas."""
 import math
 
+from banco import repositorios
 from modelos.consulta import Consulta
 from utils import formatacoes
 
@@ -21,7 +22,25 @@ class Financeiro:
         self.consulta = consulta
         self.valor = Financeiro._validar_valor(valor)
         self._pago = bool(pago)
+        repositorios.inserir_lancamento(consulta.id, self.valor, self._pago)
         Financeiro.registros.append(self)
+
+    @classmethod
+    def _de_registro(cls, linha, consultas):
+        """Monta um lançamento a partir de uma linha do banco, ligando-o à consulta já carregada."""
+        registro = cls.__new__(cls)
+        registro.consulta = consultas[linha['consulta_id']]
+        registro.valor = linha['valor']
+        registro._pago = bool(linha['pago'])
+        return registro
+
+    @classmethod
+    def carregar(cls):
+        """Substitui a lista em memória pelos lançamentos do banco. Carregue as consultas antes."""
+        consultas = {consulta.id: consulta for consulta in Consulta.consultas}
+        cls.registros[:] = [
+            cls._de_registro(linha, consultas) for linha in repositorios.listar_lancamentos()
+        ]
 
     def __str__(self):
         return (
@@ -45,17 +64,21 @@ class Financeiro:
         """Marca o lançamento como pago. Retorna False se ele já estava pago."""
         if self._pago:
             return False
+        repositorios.definir_pago_lancamento(self.consulta.id, True)
         self._pago = True
         return True
 
     def alterar_valor(self, novo_valor):
         if self._pago:
             raise ValueError('Não é possível alterar o valor de um lançamento já pago.')
-        self.valor = Financeiro._validar_valor(novo_valor)
+        valor = Financeiro._validar_valor(novo_valor)
+        repositorios.atualizar_valor_lancamento(self.consulta.id, valor)
+        self.valor = valor
 
     def excluir(self):
         if self._pago:
             raise ValueError('Não é possível excluir um lançamento já pago.')
+        repositorios.excluir_lancamento(self.consulta.id)
         Financeiro.registros.remove(self)
 
     @staticmethod

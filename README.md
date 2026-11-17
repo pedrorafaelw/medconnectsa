@@ -23,7 +23,7 @@ Login padrão:
 
 Após 3 tentativas incorretas o acesso é bloqueado. Para sair a qualquer momento, use a opção **6 - Sair** do menu principal (ou `Ctrl+C`).
 
-> Os dados ficam apenas em memória e são perdidos ao encerrar o programa.
+> Os dados são salvos no banco SQLite `medconnect.db`, criado automaticamente na pasta do projeto na primeira execução. Para começar do zero, apague esse arquivo.
 
 ## Como rodar os testes
 
@@ -31,10 +31,16 @@ Após 3 tentativas incorretas o acesso é bloqueado. Para sair a qualquer moment
 python -m unittest test -v
 ```
 
+Os testes usam bancos temporários (em memória ou em uma pasta temporária) e não alteram o `medconnect.db`.
+
 ## Estrutura
 
 ```
 medconnect/
+├── banco/
+│   ├── __init__.py
+│   ├── conexao.py
+│   └── repositorios.py
 ├── modelos/
 │   ├── __init__.py
 │   ├── paciente.py
@@ -50,6 +56,21 @@ medconnect/
 ├── test.py
 └── README.md
 ```
+
+## Banco de dados (SQLite)
+
+O sistema usa o `sqlite3`, que já vem com o Python. O banco é a fonte dos dados: ao iniciar, `banco.inicializar()` cria as tabelas (se ainda não existirem) e carrega os registros para as listas dos modelos. Cada alteração (cadastro, edição, mudança de status, exclusão) é gravada primeiro no banco e só depois aplicada ao objeto em memória.
+
+| Tabela       | Chave primária | Relacionamentos                                        |
+|--------------|----------------|--------------------------------------------------------|
+| `pacientes`  | `cpf`          | —                                                      |
+| `medicos`    | `crm`          | —                                                      |
+| `consultas`  | `id` (automático) | `paciente_cpf` → `pacientes`, `medico_crm` → `medicos` |
+| `financeiro` | `consulta_id`  | `consulta_id` → `consultas` (um lançamento por consulta) |
+
+- `banco/conexao.py`: abre a conexão, ativa as chaves estrangeiras (`PRAGMA foreign_keys = ON`) e cria as tabelas.
+- `banco/repositorios.py`: todos os comandos SQL, sempre com parâmetros `?` (nunca concatenando texto) para evitar SQL injection.
+- Pacientes e médicos que já têm consultas no histórico **não podem ser excluídos**, para não perder o histórico nem o financeiro. Desative o paciente ou marque o médico como indisponível.
 
 ## Módulos
 
@@ -69,7 +90,7 @@ medconnect/
 - `alternar_disponibilidade()`, `atualizar(...)`, `excluir()`, `buscar_por_crm(crm)`.
 
 ### `modelos/consulta.py` (classe `Consulta`)
-- Atributos: `paciente`, `medico`, `data`, `hora`, `tipo` (presencial/online), `_status` e a lista de classe `consultas`. Cada consulta recebe um número (`id`) automático.
+- Atributos: `paciente`, `medico`, `data`, `hora`, `tipo` (presencial/online), `_status` e a lista de classe `consultas`. Cada consulta recebe um número (`id`) automático, gerado pelo banco.
 - Propriedades: `status_formatado` (maiúsculo), `resumo` (uma linha).
 - `agendar(paciente, medico, data, hora, tipo='presencial')`: só agenda se o paciente estiver ativo e o médico disponível, e então marca o médico como **indisponível**.
 - `realizar()` e `cancelar()`: mudam o status e **liberam o médico**.
